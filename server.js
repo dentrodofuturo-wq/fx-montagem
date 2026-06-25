@@ -1,6 +1,6 @@
-// FX · Serviço de Montagem ML Clips
-// Recebe 2 clipes (Veo) + locução + legendas → devolve MP4 1080x1920 15s.
-// Receita: concat 8s+7s normalizado a 30fps, legenda queimada em janelas, marca FX.
+// FX · Serviço de Montagem ML Clips — v3 (leve, cabe em 512MB)
+// 2 clipes (Veo) + locução + legendas → MP4 vertical 720x1280 15s.
+// Otimizado p/ Render Free: 720p + ultrafast + 1 thread (pico de RAM baixo).
 
 const express = require('express');
 const { execFile } = require('child_process');
@@ -13,8 +13,8 @@ const app = express();
 app.use(express.json({ limit: '64mb' }));
 
 const FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
+const W = 720, H = 1280; // resolução de trabalho (vertical) — leve p/ 512MB
 
-// quebra texto em linhas de ~maxChars pra caber na vertical
 function wrap(txt, maxChars = 22) {
   const words = String(txt || '').trim().split(/\s+/);
   const lines = []; let cur = '';
@@ -25,18 +25,13 @@ function wrap(txt, maxChars = 22) {
   if (cur.trim()) lines.push(cur.trim());
   return lines.join('\n');
 }
-// nunca devolve vazio (drawtext quebra com textfile vazio)
-function safeLegenda(txt) {
-  const w = wrap(txt);
-  return w.trim() ? w : ' ';
-}
+function safeLegenda(txt) { const w = wrap(txt); return w.trim() ? w : ' '; }
 
 function run(cmd, args) {
   return new Promise((resolve, reject) => {
     execFile(cmd, args, { maxBuffer: 1024 * 1024 * 256 }, (err, stdout, stderr) => {
       if (err) {
         const s = String(stderr || err.message || '');
-        // erro real do ffmpeg fica nas ultimas linhas (banner fica no topo)
         const tail = s.split('\n').map(l => l.trim()).filter(Boolean).slice(-6).join('  |  ');
         return reject(new Error(tail || s.slice(-600)));
       }
@@ -45,10 +40,8 @@ function run(cmd, args) {
   });
 }
 
-app.get('/', (_req, res) => res.json({ ok: true, service: 'fx-montagem', v: 2 }));
+app.get('/', (_req, res) => res.json({ ok: true, service: 'fx-montagem', v: 3, res: `${W}x${H}` }));
 
-// POST /montar
-// body: { clip1_b64, clip2_b64, locucao_b64, legendas: { b1,b2,b3,b4 } }
 app.post('/montar', async (req, res) => {
   const id = crypto.randomBytes(5).toString('hex');
   const dir = path.join(os.tmpdir(), 'fx_' + id);
@@ -68,11 +61,11 @@ app.post('/montar', async (req, res) => {
     fs.writeFileSync(p('b3.txt'), safeLegenda(legendas.b3));
     fs.writeFileSync(p('b4.txt'), safeLegenda(legendas.b4));
 
-    const DT = `fontfile=${FONT}:fontcolor=white:fontsize=52:line_spacing=14:` +
-      `box=1:boxcolor=0x000000@0.55:boxborderw=26:x=(w-text_w)/2:y=h-580`;
+    // tamanhos proporcionais a 720x1280
+    const DT = `fontfile=${FONT}:fontcolor=white:fontsize=36:line_spacing=10:` +
+      `box=1:boxcolor=0x000000@0.55:boxborderw=18:x=(w-text_w)/2:y=h-390`;
 
-    // fps=30 + scale/crop normaliza cada clipe antes do concat (Veo pode vir noutro fps/dim)
-    const norm = 'setpts=PTS-STARTPTS,fps=30,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920';
+    const norm = `setpts=PTS-STARTPTS,fps=24,scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}`;
     const vchain =
       `[0:v]trim=0:8,${norm}[v0];` +
       `[1:v]trim=0:7,${norm}[v1];` +
@@ -81,14 +74,20 @@ app.post('/montar', async (req, res) => {
       `drawtext=${DT}:textfile=${p('b2.txt')}:enable='between(t,3,8)',` +
       `drawtext=${DT}:textfile=${p('b3.txt')}:enable='between(t,8,12)',` +
       `drawtext=${DT}:textfile=${p('b4.txt')}:enable='between(t,12,15)',` +
-      `drawtext=fontfile=${FONT}:text=FX:fontcolor=0xC8A96E:fontsize=44:x=w-text_w-50:y=70:alpha=0.9[vout]`;
+      `drawtext=fontfile=${FONT}:text=FX:fontcolor=0xC8A96E:fontsize=30:x=w-text_w-34:y=48:alpha=0.9[vout]`;
 
     const args = ['-y', '-i', p('c1.mp4'), '-i', p('c2.mp4')];
     if (temAudio) args.push('-i', p('voz.wav'));
     args.push('-filter_complex', vchain, '-map', '[vout]');
     if (temAudio) args.push('-map', '2:a', '-c:a', 'aac', '-b:a', '128k', '-shortest');
-    args.push('-t', '15', '-r', '30', '-pix_fmt', 'yuv420p', '-c:v', 'libx264',
-      '-preset', 'veryfast', '-crf', '22', '-movflags', '+faststart', p('out.mp4'));
+    args.push(
+      '-t', '15', '-r', '24',
+      '-threads', '1',                 // Render Free = 1 vCPU; multithread so incha RAM
+      '-pix_fmt', 'yuv420p',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '24',
+      '-max_muxing_queue_size', '256',
+      '-movflags', '+faststart', p('out.mp4')
+    );
 
     await run('ffmpeg', args);
     const mp4 = fs.readFileSync(p('out.mp4'));
@@ -101,4 +100,4 @@ app.post('/montar', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log('fx-montagem na porta ' + PORT));
+app.listen(PORT, () => console.log('fx-montagem v3 na porta ' + PORT));
