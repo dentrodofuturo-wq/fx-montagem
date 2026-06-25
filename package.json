@@ -1,0 +1,8 @@
+{
+  "name": "fx-montagem",
+  "version": "1.0.0",
+  "description": "Serviço de montagem ML Clips (ffmpeg) para a Mesa de Comando FX",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "express": "^4.19.2" }
+}
