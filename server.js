@@ -69,7 +69,7 @@ app.post('/montar', async (req, res) => {
     fs.writeFileSync(p('b4.txt'), safeLegenda(legendas.b4));
 
     const DT = `fontfile=${FONT}:fontcolor=white:fontsize=52:line_spacing=14:` +
-      `box=1:boxcolor=0x000000@0.55:boxborderw=26:x=(w-text_w)/2:y=h-580:text_align=C`;
+      `box=1:boxcolor=0x000000@0.55:boxborderw=26:x=(w-text_w)/2:y=h-580`;
 
     // fps=30 + scale/crop normaliza cada clipe antes do concat (Veo pode vir noutro fps/dim)
     const norm = 'setpts=PTS-STARTPTS,fps=30,scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920';
