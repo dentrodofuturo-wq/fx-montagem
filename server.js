@@ -1,4 +1,4 @@
-// FX · Serviço de Montagem ML Clips — v6 (Seedance)
+// FX · Serviço de Montagem ML Clips — v7 (Seedance · vídeo limpo)
 // Recebe clips_urls[] (URLs do fal/Seedance) OU clips[] base64 → MP4 vertical 1080x1920, 30s.
 // Legenda estilo Apple (fina, sombra suave, sem caixa) + linha dourada, fora da zona segura ML.
 // Locução PT-BR (nosso TTS) sobreposta. Regras ML Clips: 9:16, 10-60s, voz, sem preço.
@@ -69,7 +69,7 @@ function run(cmd, args) {
   });
 }
 
-app.get('/', (_req, res) => res.json({ ok: true, service: 'fx-montagem', v: 6, motor: 'seedance', res: `${W}x${H}`, dur: DUR }));
+app.get('/', (_req, res) => res.json({ ok: true, service: 'fx-montagem', v: 7, motor: 'seedance', res: `${W}x${H}`, dur: DUR }));
 
 app.post('/montar', async (req, res) => {
   prune();
@@ -105,17 +105,14 @@ app.post('/montar', async (req, res) => {
     fs.writeFileSync(p('l2.txt'), safeLegenda(L2));
     fs.writeFileSync(p('l3.txt'), safeLegenda(L3));
 
-    // ===== LEGENDA ESTILO APPLE ===== fina, branca, sem caixa, sombra suave; y~60% (fora do rodapé ML)
-    const Y = 'y=h*0.60';
+    // ===== LEGENDA ESTILO APPLE ===== fina, branca, sem caixa, sombra suave.
+    // Ancorada pela BASE do bloco em ~84% da altura (um pouco acima da base, fora do rodapé seguro do ML).
+    // Cresce para cima, entao legenda longa ou curta nunca invade os controles do ML Clips.
+    const Y = 'y=h*0.84-text_h';
     const base = `fontfile=${esc(FONT)}:fontsize=58:fontcolor=white:line_spacing=18:` +
       `shadowcolor=black@0.55:shadowx=0:shadowy=2:x=(w-text_w)/2:${Y}`;
     const dt = (file, win) =>
       `drawtext=${base}:textfile=${esc(p(file))}:enable='between(t,${win[0]},${win[1]})'`;
-    const goldLine = (win) =>
-      `drawbox=x=(w-220)/2:y=h*0.60+150:w=220:h=2:color=0xC8A96E@0.9:t=fill:` +
-      `enable='between(t,${win[0]},${win[1]})'`;
-    const marca = `drawtext=fontfile=${esc(FONT_BOLD)}:text=FX:fontcolor=0xC8A96E@0.85:` +
-      `fontsize=40:x=w-text_w-48:y=58`;
 
     const norm = i =>
       `[${i}:v]trim=0:${SEG[i]},setpts=PTS-STARTPTS,fps=30,` +
@@ -124,10 +121,9 @@ app.post('/montar', async (req, res) => {
     const vchain =
       `${norm(0)};${norm(1)};${norm(2)};` +
       `[v0][v1][v2]concat=n=3:v=1:a=0[vc];` +
-      `[vc]${dt('l1.txt', WINDOWS[0])},${goldLine(WINDOWS[0])},` +
-      `${dt('l2.txt', WINDOWS[1])},${goldLine(WINDOWS[1])},` +
-      `${dt('l3.txt', WINDOWS[2])},${goldLine(WINDOWS[2])},` +
-      `${marca}[vout]`;
+      `[vc]${dt('l1.txt', WINDOWS[0])},` +
+      `${dt('l2.txt', WINDOWS[1])},` +
+      `${dt('l3.txt', WINDOWS[2])}[vout]`;
 
     const outName = id + '.mp4';
     const outPath = path.join(PUB, outName);
