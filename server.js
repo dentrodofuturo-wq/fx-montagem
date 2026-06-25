@@ -1,6 +1,7 @@
-// FX · Serviço de Montagem ML Clips — v3 (leve, cabe em 512MB)
+// FX · Serviço de Montagem ML Clips — v4
 // 2 clipes (Veo) + locução + legendas → MP4 vertical 720x1280 15s.
-// Otimizado p/ Render Free: 720p + ultrafast + 1 thread (pico de RAM baixo).
+// AGORA: salva o MP4 e devolve um LINK (em vez de base64 gigante).
+// Leve p/ Render Free: 720p + ultrafast + 1 thread.
 
 const express = require('express');
 const { execFile } = require('child_process');
@@ -12,8 +13,13 @@ const crypto = require('crypto');
 const app = express();
 app.use(express.json({ limit: '64mb' }));
 
+// pasta pública servida via /v  (link direto pro MP4)
+const PUB = path.join(os.tmpdir(), 'fx_pub');
+fs.mkdirSync(PUB, { recursive: true });
+app.use('/v', express.static(PUB));
+
 const FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf';
-const W = 720, H = 1280; // resolução de trabalho (vertical) — leve p/ 512MB
+const W = 720, H = 1280;
 
 function wrap(txt, maxChars = 22) {
   const words = String(txt || '').trim().split(/\s+/);
@@ -27,9 +33,20 @@ function wrap(txt, maxChars = 22) {
 }
 function safeLegenda(txt) { const w = wrap(txt); return w.trim() ? w : ' '; }
 
+// limpa MP4s com mais de 60min (Render Free tem disco efemero)
+function prune() {
+  try {
+    const now = Date.now();
+    for (const f of fs.readdirSync(PUB)) {
+      const fp = path.join(PUB, f);
+      if (now - fs.statSync(fp).mtimeMs > 3600000) fs.rmSync(fp, { force: true });
+    }
+  } catch (_) {}
+}
+
 function run(cmd, args) {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { maxBuffer: 1024 * 1024 * 256 }, (err, stdout, stderr) => {
+    execFile(cmd, args, { maxBuffer: 1024 * 1024 * 64 }, (err, stdout, stderr) => {
       if (err) {
         const s = String(stderr || err.message || '');
         const tail = s.split('\n').map(l => l.trim()).filter(Boolean).slice(-6).join('  |  ');
@@ -40,9 +57,10 @@ function run(cmd, args) {
   });
 }
 
-app.get('/', (_req, res) => res.json({ ok: true, service: 'fx-montagem', v: 3, res: `${W}x${H}` }));
+app.get('/', (_req, res) => res.json({ ok: true, service: 'fx-montagem', v: 4, res: `${W}x${H}` }));
 
 app.post('/montar', async (req, res) => {
+  prune();
   const id = crypto.randomBytes(5).toString('hex');
   const dir = path.join(os.tmpdir(), 'fx_' + id);
   fs.mkdirSync(dir, { recursive: true });
@@ -61,7 +79,6 @@ app.post('/montar', async (req, res) => {
     fs.writeFileSync(p('b3.txt'), safeLegenda(legendas.b3));
     fs.writeFileSync(p('b4.txt'), safeLegenda(legendas.b4));
 
-    // tamanhos proporcionais a 720x1280
     const DT = `fontfile=${FONT}:fontcolor=white:fontsize=36:line_spacing=10:` +
       `box=1:boxcolor=0x000000@0.55:boxborderw=18:x=(w-text_w)/2:y=h-390`;
 
@@ -76,22 +93,24 @@ app.post('/montar', async (req, res) => {
       `drawtext=${DT}:textfile=${p('b4.txt')}:enable='between(t,12,15)',` +
       `drawtext=fontfile=${FONT}:text=FX:fontcolor=0xC8A96E:fontsize=30:x=w-text_w-34:y=48:alpha=0.9[vout]`;
 
+    const outName = id + '.mp4';
+    const outPath = path.join(PUB, outName);
+
     const args = ['-y', '-i', p('c1.mp4'), '-i', p('c2.mp4')];
     if (temAudio) args.push('-i', p('voz.wav'));
     args.push('-filter_complex', vchain, '-map', '[vout]');
     if (temAudio) args.push('-map', '2:a', '-c:a', 'aac', '-b:a', '128k', '-shortest');
     args.push(
-      '-t', '15', '-r', '24',
-      '-threads', '1',                 // Render Free = 1 vCPU; multithread so incha RAM
-      '-pix_fmt', 'yuv420p',
+      '-t', '15', '-r', '24', '-threads', '1', '-pix_fmt', 'yuv420p',
       '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '24',
-      '-max_muxing_queue_size', '256',
-      '-movflags', '+faststart', p('out.mp4')
+      '-max_muxing_queue_size', '256', '-movflags', '+faststart', outPath
     );
 
     await run('ffmpeg', args);
-    const mp4 = fs.readFileSync(p('out.mp4'));
-    res.json({ ok: true, mp4_base64: mp4.toString('base64'), bytes: mp4.length });
+    const bytes = fs.statSync(outPath).size;
+    const proto = req.headers['x-forwarded-proto'] || req.protocol;
+    const url = `${proto}://${req.get('host')}/v/${outName}`;
+    res.json({ ok: true, bytes, url });
   } catch (e) {
     res.status(500).json({ ok: false, erro: String(e.message || e) });
   } finally {
@@ -100,4 +119,4 @@ app.post('/montar', async (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log('fx-montagem v3 na porta ' + PORT));
+app.listen(PORT, () => console.log('fx-montagem v4 na porta ' + PORT));
